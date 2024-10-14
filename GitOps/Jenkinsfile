@@ -1,6 +1,6 @@
 @Library('Shared') _
 pipeline {
-    agent {label 'Node'}
+    agent any
     
     parameters {
         string(name: 'FRONTEND_DOCKER_TAG', defaultValue: '', description: 'Frontend Docker tag of the image built by the CI job')
@@ -8,9 +8,9 @@ pipeline {
     }
 
     stages {
-        stage("Workspace cleanup"){
-            steps{
-                script{
+        stage("Workspace cleanup") {
+            steps {
+                script {
                     cleanWs()
                 }
             }
@@ -18,107 +18,126 @@ pipeline {
         
         stage('Git: Code Checkout') {
             steps {
-                script{
-                    code_checkout("https://github.com/TestArcheReyna/Wanderlust-Mega-Project.git","main")
+                script {
+                    code_checkout("https://github.com/TestArcheReyna/Wanderlust-Mega-Project.git", "main")
                 }
             }
         }
         
         stage('Verify: Docker Image Tags') {
             steps {
-                script{
+                script {
                     echo "FRONTEND_DOCKER_TAG: ${params.FRONTEND_DOCKER_TAG}"
                     echo "BACKEND_DOCKER_TAG: ${params.BACKEND_DOCKER_TAG}"
                 }
             }
         }
         
-        
-        stage("Update: Kubernetes manifests"){
-            steps{
-                script{
-                    dir('kubernetes'){
-                        sh """
-                            sed -i -e s/wanderlust-backend-beta.*/wanderlust-backend-beta:${params.BACKEND_DOCKER_TAG}/g backend.yaml
-                        """
+        stage("Update: Kubernetes manifests") {
+            steps {
+                script {
+                    // Ensure Docker tags are provided before updating manifests
+                    if (params.FRONTEND_DOCKER_TAG && params.BACKEND_DOCKER_TAG) {
+                        dir('kubernetes') {
+                            sh """
+                                set -e  # Exit immediately if a command exits with a non-zero status
+                                sed -i -e 's/wanderlust-backend-beta.*/wanderlust-backend-beta:${params.BACKEND_DOCKER_TAG}/g' backend.yaml
+                            """
+                        }
+                        
+                        dir('kubernetes') {
+                            sh """
+                                set -e
+                                sed -i -e 's/wanderlust-frontend-beta.*/wanderlust-frontend-beta:${params.FRONTEND_DOCKER_TAG}/g' frontend.yaml
+                            """
+                        }
+                    } else {
+                        error("Docker tags for frontend or backend are not provided.")
                     }
-                    
-                    dir('kubernetes'){
-                        sh """
-                            sed -i -e s/wanderlust-frontend-beta.*/wanderlust-frontend-beta:${params.FRONTEND_DOCKER_TAG}/g frontend.yaml
-                        """
-                    }
-                    
                 }
             }
         }
         
-        stage("Git: Code update and push to GitHub"){
-            steps{
-                script{
-                    withCredentials([gitUsernamePassword(credentialsId: 'Github-cred', gitToolName: 'Default')]) {
-                        sh '''
-                        echo "Checking repository status: "
-                        git status
+        stage('Git: Configure User Details') {
+            steps {
+                script {
+                    echo 'Configuring Git user details:'
+                    sh 'git config --global user.email "aakashp9902@gmail.com"'
+                    sh 'git config --global user.name "aakash"'
+                }
+            }
+        }
+        
+        stage('Git: Check Changes') {
+            steps {
+                script {
+                    // Check if there are any changes in the git repository
+                    def changes = sh(script: 'git status --porcelain', returnStdout: true).trim()
                     
-                        echo "Adding changes to git: "
-                        git add .
-                        
-                        echo "Commiting changes: "
-                        git commit -m "Updated environment variables"
-                        
-                        echo "Pushing changes to github: "
-                        git push https://github.com/TestArcheReyna/Wanderlust-Mega-Project.git main
-                    '''
+                    if (changes) {
+                        echo "Changes detected. Proceeding with git add and commit."
+                        sh 'git add .'
+                        sh 'git commit -m "Updated environment variables"'
+                    } else {
+                        echo "No changes to commit. Working tree is clean."
                     }
                 }
             }
         }
     }
-  post {
+    
+    post {
         success {
             script {
-                emailext attachLog: true,
-                from: 'aakashp9902@gmail.com',
-                subject: "Wanderlust Application has been updated and deployed - '${currentBuild.result}'",
-                body: """
-                    <html>
-                    <body>
-                        <div style="background-color: #FFA07A; padding: 10px; margin-bottom: 10px;">
-                            <p style="color: black; font-weight: bold;">Project: ${env.JOB_NAME}</p>
-                        </div>
-                        <div style="background-color: #90EE90; padding: 10px; margin-bottom: 10px;">
-                            <p style="color: black; font-weight: bold;">Build Number: ${env.BUILD_NUMBER}</p>
-                        </div>
-                        <div style="background-color: #87CEEB; padding: 10px; margin-bottom: 10px;">
-                            <p style="color: black; font-weight: bold;">URL: ${env.BUILD_URL}</p>
-                        </div>
-                    </body>
-                    </html>
-            """,
-            to: 'aakashp9902@gmail.com',
-            mimeType: 'text/html'
+                emailext(
+                    attachLog: true,
+                    from: 'aakashp9902@gmail.com',
+                    subject: "Wanderlust Application has been updated and deployed - '${currentBuild.result}'",
+                    body: """
+                        <html>
+                        <body>
+                            <div style="background-color: #FFA07A; padding: 10px; margin-bottom: 10px;">
+                                <p style="color: black; font-weight: bold;">Project: ${env.JOB_NAME}</p>
+                            </div>
+                            <div style="background-color: #90EE90; padding: 10px; margin-bottom: 10px;">
+                                <p style="color: black; font-weight: bold;">Build Number: ${env.BUILD_NUMBER}</p>
+                            </div>
+                            <div style="background-color: #87CEEB; padding: 10px; margin-bottom: 10px;">
+                                <p style="color: black; font-weight: bold;">URL: ${env.BUILD_URL}</p>
+                            </div>
+                        </body>
+                        </html>
+                    """,
+                    to: 'aakashp9902@gmail.com',
+                    mimeType: 'text/html'
+                )
             }
         }
-      failure {
+        failure {
             script {
-                emailext attachLog: true,
-                from: 'aakashp9902@gmail.com',
-                subject: "Wanderlust Application build failed - '${currentBuild.result}'",
-                body: """
-                    <html>
-                    <body>
-                        <div style="background-color: #FFA07A; padding: 10px; margin-bottom: 10px;">
-                            <p style="color: black; font-weight: bold;">Project: ${env.JOB_NAME}</p>
-                        </div>
-                        <div style="background-color: #90EE90; padding: 10px; margin-bottom: 10px;">
-                            <p style="color: black; font-weight: bold;">Build Number: ${env.BUILD_NUMBER}</p>
-                        </div>
-                    </body>
-                    </html>
-            """,
-            to: 'aakashp9902@gmail.com',
-            mimeType: 'text/html'
+                emailext(
+                    attachLog: true,
+                    from: 'aakashp9902@gmail.com',
+                    subject: "Wanderlust Application build failed - '${currentBuild.result}'",
+                    body: """
+                        <html>
+                        <body>
+                            <div style="background-color: #FFA07A; padding: 10px; margin-bottom: 10px;">
+                                <p style="color: black; font-weight: bold;">Project: ${env.JOB_NAME}</p>
+                            </div>
+                            <div style="background-color: #90EE90; padding: 10px; margin-bottom: 10px;">
+                                <p style="color: black; font-weight: bold;">Build Number: ${env.BUILD_NUMBER}</p>
+                            </div>
+                            <div style="background-color: #FF6347; padding: 10px; margin-bottom: 10px;">
+                                <p style="color: black; font-weight: bold;">Build Status: ${currentBuild.result}</p>
+                                <p style="color: black;">Check the logs for details.</p>
+                            </div>
+                        </body>
+                        </html>
+                    """,
+                    to: 'aakashp9902@gmail.com',
+                    mimeType: 'text/html'
+                )
             }
         }
     }
